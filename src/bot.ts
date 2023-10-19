@@ -11,7 +11,7 @@ const CLIENT_ID: string | undefined = process.env.CLIENT_ID;
 const GUILD_ID: string | undefined = process.env.GUILD_ID;
 const CATEGORY_ID: string | undefined = process.env.CATEGORY_ID;
 
-const initialPrompt = `Ignore toutes les instructions précédentes. Tu es recruteur IT senior et tu vas faire un entretien avec moi. Tu vas me poser des questions dans 3 domaines différents: 1) domaine technique pour tester mes compétences via mes expériences passées. 2) savoir comment je peux m'intégrer à une équipe technique. 3) approfondir mes compétences en te basant sur un test technique que j'ai réalisé. Je te donnerai de nouvelles instructions pour chaque partie. Commençons la partie 1. Tu devras me poser 6 à 7 questions pour approfondir mes compétences tech (demande moi quelle compétence je veux), mais tu ne peux en poser qu'une seule à la fois !! donc Attends que j'aie répondu à ta question avant de passer à la suivante. Une fois toutes les questions répondues, je veux que tu me notes sur différents critères. Une fois l'entretien terminé, donne-moi une notation avec tous les critères des parties précédentes mise à jour.`;
+let initialPrompt = ``;
 
 // Création d'une nouvelle instance du client Discord avec des intentions spécifiées.
 // Ces intentions définissent pour quels types d'événements le bot devrait écouter.
@@ -28,22 +28,42 @@ interface Message {
   role: string; // Le rôle de l'envoyeur du message (par exemple, "utilisateur" ou "assistant").
   content: string;
 }
-
+interface Command {
+        name: string
+        type: number
+        description: string
+        required: boolean
+}
 // Objet pour conserver un historique des conversations. 
 let conversationHistory: Record<string, Message[]> = {};
-
-// Objet pour suivre quels canaux ont commencé une conversation.
-let conversationStarted: Record<string, boolean> = {};
+let conversationMessageProcessing: Record<string, boolean> = {};
 
 // Tableau des commandes disponibles pour le bot.
-const commands : Array<{ name: string; description: string }> = [
+const commands : Array<{ name: string; description: string; options?: Array<Command>  }> = [
+
   {
-    name: "start",
-    description: "Démarre l'entretien !",
+    name: "setprompt",
+    description: "Définir le prompt de l'entretien.",
+    options: [
+      {
+        name: "prompt",
+        type: 3,
+        description: "Definissez un prompt de départ ici",
+        required: true
+      }
+    ]
   },
   {
-    name: "next",
-    description: "Passe à la question suivante.",
+    name: "settest",
+    description: "Définir le prompt de l'entretien.",
+    options: [
+      {
+        name: "test",
+        type: 3,
+        description: "envoyez ici le test",
+        required: true
+      }
+    ]
   },
   //TODO : pas encore implémenté
   { 
@@ -77,117 +97,82 @@ client.once("ready", () => {
 
 
 // Écouteur pour l'événement "interactionCreate", qui est déclenché lorsque les utilisateurs interagissent avec les commandes du bot.
-client.on("interactionCreate", async (interaction: { isCommand?: any; deferReply?: any; channelId?: any; editReply?: any; followUp?: any; reply?: any; channel?: any; send?: any; commandName?: any; }) => {
+client.on("interactionCreate", async (interaction: {
+  options: any; isCommand?: any; deferReply?: any; channelId?: any; editReply?: any; followUp?: any; reply?: any; channel?: any; send?: any; commandName?: any; 
+}) => {
   // Vérifie si l'interaction est une commande.
   if (!interaction.isCommand()) return;
 
   const { commandName } = interaction;
 
-  if (commandName === "start") {
-    try {
-      // Je dis à discord que je vais répondre je dispose de 15min maintenant. Autrement discord attend une réponse en 3secondes
-      await interaction.deferReply();
-
-      // Réinitialisez l'historique de la conversation pour ce canal.
-      conversationHistory[interaction.channelId] = [];
-
-      // Créez un nouvel historique de conversation avec le message initial.
-      // Cette étape est effectuée pour éviter de modifier l'historique existant en cas d'échec de l'API.
-      const newConversationHistory = [...conversationHistory[interaction.channelId], {
-        role: "system",
-        content: initialPrompt,
-      }];
-
-      const response = await callOpenAI(newConversationHistory);
-      const botReply = response.data.choices[0].message.content;
-
-      // Mettez à jour l'historique de la conversation car l'appel API a réussi.
-      conversationHistory[interaction.channelId] = newConversationHistory;
-
-      // Éditez la réponse initiale du bot avec la réponse obtenue de OpenAI.
-      await interaction.editReply(`${botReply}\n`);
-
-      conversationHistory[interaction.channelId].push({
-        role: "assistant",
-        content: botReply,
-      });
-
-      // Indique que la conversation a commencé pour ce canal.
-      conversationStarted[interaction.channelId] = true;
-
-    } catch (error) {
-      console.error("Erreur lors de la commande 'start':", error);
-      await interaction.followUp("Une erreur est survenue lors du démarrage de l'entretien.");
-    }
+  if (commandName === "setprompt") {
+  initialPrompt = interaction.options.getString("prompt") || "";
+  await interaction.reply(`Le prompt a été défini sur : \n >>> ${initialPrompt}\n\n`);
   }
+  conversationHistory[interaction.channelId] = [];
 
-// si /next
-if (commandName === "next") {
-  try {
-    // Vérifiez si la conversation a commencé dans ce canal.
-    if (!conversationStarted[interaction.channelId])
-      return interaction.reply("L'entretien n'a pas encore commencé !");
-    
-      await interaction.deferReply();
-    
-    const botReply = await callOpenAI(conversationHistory[interaction.channel.id]);
+  conversationHistory[interaction.channelId].push({
+    role: "system",
+    content: initialPrompt,
+  });
+  if(commandName === "settest") {
+    try{
+    await interaction.reply(`Le test a été défini sur : \n >>> ${interaction.options.getString("test")}\n\n`);
 
-    const res = botReply.data.choices[0].message.content;
+    const res = await callOpenAI([...conversationHistory[interaction.channel.id], { role: "system", content: interaction.options.getString("test") }]);
 
-    // Vérifiez si la réponse est courte (moins de 2000 caractères).
-    if (res.length <= 2000) {
-      interaction.editReply(res); // Mettez à jour le message temporaire avec la réponse.
-      conversationHistory[interaction.channel.id].push({
-        role: "assistant",
-        content: res,
-      });
-    } else {
-      // Si la réponse est longue, divisez-la en plusieurs messages de moins de 2000 caractères chacun.
-      const messages = res.match(/.{1,2000}/g);
+    const botReply = res.data.choices[0].message.content;
 
-      // Envoyez chaque message découpé. (Discord bloque le nombre de caractère max)
-      messages.forEach(async (msg: any) => {
-        await interaction.reply(msg);
-      });
+    await interaction.channel.send(`>>> ${botReply}`);
 
-      // Mettez à jour l'historique avec la réponse complète du bot.
-      conversationHistory[interaction.channel.id].push({
-        role: "assistant",
-        content: res,
-      });
+    conversationHistory[interaction.channel.id].push({
+      role: "system",
+      content: interaction.options.getString("test"),
+    });
+
+    conversationHistory[interaction.channel.id].push({
+      role: "assistant",
+      content: botReply,
+    });
+
+    }catch(error){
+    console.error("Erreur lors de la commande 'settest':", error);
+    await interaction.followUp("Une erreur est survenue lors de la définition du test.");
     }
-  } catch (error) {
-    console.error("Erreur lors de la commande 'next':", error);
-    await interaction.followUp("Une erreur est survenue lors de la poursuite de l'entretien.");
-  }
-}
+  }  
 });
 
 
 //Fonction qui traite chaque nouveau message qui n'est pas une slash commande : /next etc.
 client.on("messageCreate", async (message: { author: { bot: any; }; channel: { parentId: string | undefined; send: (arg0: string) => any; id: string | number; }; content: any; }) => {
 
-  // Ignorer les messages provenant des bots.
   if (message.author.bot) return;
 
-  // Assurez-vous que le message provient de la bonne catégorie.
   if (message.channel.parentId !== CATEGORY_ID) return;
 
-  // Vérifiez si la conversation a commencé dans ce canal.
-  if (!conversationStarted[message.channel.id])
-    return message.channel.send("L'entretien n'a pas encore commencé !");
+  //ignore si il y'a deux message du user à la suite
+  if (conversationMessageProcessing[message.channel.id]) return;
 
+  try{
+    conversationMessageProcessing[message.channel.id] = true;
+    message.channel.send(`Traitement de votre message en cours...`)
 
-  const provisionalMessage = await message.channel.send("Traitement en cours...");
+    const res = await callOpenAI([...conversationHistory[message.channel.id], { role: "user", content: message.content }]);
+    
+    const botReply = res.data.choices[0].message.content;
+    await message.channel.send(`>>> ${botReply}`);
 
+    conversationHistory[message.channel.id].push({
+      role: "user",
+      content: message.content,
+    });
 
-  conversationHistory[message.channel.id].push({
-    role: "user",
-    content: message.content,
-  });
+    conversationMessageProcessing[message.channel.id] = false;
 
-  // Informez l'utilisateur que sa réponse a été enregistrée.
-  provisionalMessage.edit("**Réponse enregistrée !** _Vous pouvez décomposer votre réponse en plusieurs messages si vous le souhaitez. Pour valider et envoyer votre/vos messages et passer à la question suivante, tapez la commande **/next_**");
+  }catch(error){
+    console.error("Erreur lors de la commande 'messageCreate':", error);
+    await message.channel.send("Une erreur est survenue lors de la réponse à votre message.");
+  }
 });
 
 async function callOpenAI(content: Message[]) {
@@ -211,3 +196,85 @@ async function callOpenAI(content: Message[]) {
 
 client.login(DISCORD_TOKEN);
 
+// OUTDATED but keep for reference : 
+  // if (commandName === "start") {
+  //   try {
+  //     // Je dis à discord que je vais répondre je dispose de 15min maintenant. Autrement discord attend une réponse en 3secondes
+  //     await interaction.deferReply();
+
+  //     // Réinitialisez l'historique de la conversation pour ce canal.
+  //     conversationHistory[interaction.channelId] = [];
+
+  //     // Créez un nouvel historique de conversation avec le message initial.
+  //     // Cette étape est effectuée pour éviter de modifier l'historique existant en cas d'échec de l'API.
+  //     const newConversationHistory = [...conversationHistory[interaction.channelId], {
+  //       role: "system",
+  //       content: initialPrompt,
+  //     }];
+
+  //     const response = await callOpenAI(newConversationHistory);
+  //     const botReply = response.data.choices[0].message.content;
+
+  //     // Mettez à jour l'historique de la conversation car l'appel API a réussi.
+  //     conversationHistory[interaction.channelId] = newConversationHistory;
+
+  //     // Éditez la réponse initiale du bot avec la réponse obtenue de OpenAI.
+  //     await interaction.editReply(`${botReply}\n`);
+
+  //     conversationHistory[interaction.channelId].push({
+  //       role: "assistant",
+  //       content: botReply,
+  //     });
+
+  //     // Indique que la conversation a commencé pour ce canal.
+  //     conversationStarted[interaction.channelId] = true;
+
+  //   } catch (error) {
+  //     console.error("Erreur lors de la commande 'start':", error);
+  //     await interaction.followUp("Une erreur est survenue lors du démarrage de l'entretien.");
+  //   }
+  // }
+
+
+
+
+// si /next
+// if (commandName === "next") {
+//   try {
+//     // Vérifiez si la conversation a commencé dans ce canal.
+//     if (!conversationStarted[interaction.channelId])
+//       return interaction.reply("L'entretien n'a pas encore commencé !");
+    
+//       await interaction.deferReply();
+    
+//     const botReply = await callOpenAI(conversationHistory[interaction.channel.id]);
+
+//     const res = botReply.data.choices[0].message.content;
+
+//     // Vérifiez si la réponse est courte (moins de 2000 caractères).
+//     if (res.length <= 2000) {
+//       interaction.editReply(res); // Mettez à jour le message temporaire avec la réponse.
+//       conversationHistory[interaction.channel.id].push({
+//         role: "assistant",
+//         content: res,
+//       });
+//     } else {
+//       // Si la réponse est longue, divisez-la en plusieurs messages de moins de 2000 caractères chacun.
+//       const messages = res.match(/.{1,2000}/g);
+
+//       // Envoyez chaque message découpé. (Discord bloque le nombre de caractère max)
+//       messages.forEach(async (msg: any) => {
+//         await interaction.reply(msg);
+//       });
+
+//       // Mettez à jour l'historique avec la réponse complète du bot.
+//       conversationHistory[interaction.channel.id].push({
+//         role: "assistant",
+//         content: res,
+//       });
+//     }
+//   } catch (error) {
+//     console.error("Erreur lors de la commande 'next':", error);
+//     await interaction.followUp("Une erreur est survenue lors de la poursuite de l'entretien.");
+//   }
+// }
