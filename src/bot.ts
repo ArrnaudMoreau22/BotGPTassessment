@@ -11,24 +11,31 @@ const CLIENT_ID: string | undefined = process.env.CLIENT_ID;
 const GUILD_ID: string | undefined = process.env.GUILD_ID;
 const CATEGORY_ID: string | undefined = process.env.CATEGORY_ID;
 
-const initialPrompt = `Ignore toutes les instructions précédentes. Tu es recruteur IT senior et tu vas faire un entretien avec moi. Tu vas me poser des questions dans 3 domaines différents: 1) domaine technique pour tester mes compétences via mes expériences passées. 2) savoir comment je peux m'intégrer à une équipe technique. 3) approfondir mes compétences en te basant sur un test technique que j'ai réalisé. Je te donnerai de nouvelles instructions pour chaque partie. Commençons la partie 1. Tu devras me poser 6 à 7 questions pour approfondir mes compétences en JavaScript, mais tu ne peux en poser qu'une seule à la fois !! donc Attends que j'aie répondu à ta question avant de passer à la suivante. Une fois toutes les questions répondues, je veux que tu me notes sur différents critères. Une fois l'entretien terminé, donne-moi une notation avec tous les critères des parties précédentes mise à jour.`;
+const initialPrompt = `Ignore toutes les instructions précédentes. Tu es recruteur IT senior et tu vas faire un entretien avec moi. Tu vas me poser des questions dans 3 domaines différents: 1) domaine technique pour tester mes compétences via mes expériences passées. 2) savoir comment je peux m'intégrer à une équipe technique. 3) approfondir mes compétences en te basant sur un test technique que j'ai réalisé. Je te donnerai de nouvelles instructions pour chaque partie. Commençons la partie 1. Tu devras me poser 6 à 7 questions pour approfondir mes compétences tech (demande moi quelle compétence je veux), mais tu ne peux en poser qu'une seule à la fois !! donc Attends que j'aie répondu à ta question avant de passer à la suivante. Une fois toutes les questions répondues, je veux que tu me notes sur différents critères. Une fois l'entretien terminé, donne-moi une notation avec tous les critères des parties précédentes mise à jour.`;
 
+// Création d'une nouvelle instance du client Discord avec des intentions spécifiées.
+// Ces intentions définissent pour quels types d'événements le bot devrait écouter.
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.Guilds, // Écoute les événements liés aux guildes (serveurs).
+    GatewayIntentBits.GuildMessages, // Écoute les événements liés aux messages des guildes/serveurs.
+    GatewayIntentBits.MessageContent, // Écoute les événements liés au contenu des messages.
   ],
 });
 
+// Interface pour définir la structure d'un message.
 interface Message {
-  role: string;
+  role: string; // Le rôle de l'envoyeur du message (par exemple, "utilisateur" ou "assistant").
   content: string;
 }
 
+// Objet pour conserver un historique des conversations. 
 let conversationHistory: Record<string, Message[]> = {};
+
+// Objet pour suivre quels canaux ont commencé une conversation.
 let conversationStarted: Record<string, boolean> = {};
 
+// Tableau des commandes disponibles pour le bot.
 const commands : Array<{ name: string; description: string }> = [
   {
     name: "start",
@@ -38,20 +45,26 @@ const commands : Array<{ name: string; description: string }> = [
     name: "next",
     description: "Passe à la question suivante.",
   },
+  //TODO : pas encore implémenté
   { 
     name: "help",
     description: "Affiche l'aide." 
   },
 ];
 
+// Création d'une nouvelle instance REST pour interagir avec l'API Discord.
 const rest = new REST({ version: "9" }).setToken(DISCORD_TOKEN);
 
+// Fonction auto-invoquée pour rafraîchir les commandes du bot sur Discord.
 (async () => {
   try {
     console.log("Début du rafraîchissement des commandes...");
+    
+    // Mettre à jour les commandes du bot pour la guilde spécifiée. (GUILD = serveur)
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
       body: commands,
     });
+    
     console.log("Commandes rafraîchies avec succès.");
   } catch (error) {
     console.error(error);
@@ -62,99 +75,119 @@ client.once("ready", () => {
   console.log("Bot is ready!");
 });
 
+
+// Écouteur pour l'événement "interactionCreate", qui est déclenché lorsque les utilisateurs interagissent avec les commandes du bot.
 client.on("interactionCreate", async (interaction: { isCommand?: any; deferReply?: any; channelId?: any; editReply?: any; followUp?: any; reply?: any; channel?: any; send?: any; commandName?: any; }) => {
+  // Vérifie si l'interaction est une commande.
   if (!interaction.isCommand()) return;
 
   const { commandName } = interaction;
+
   if (commandName === "start") {
     try {
+      // Je dis à discord que je vais répondre je dispose de 15min maintenant. Autrement discord attend une réponse en 3secondes
       await interaction.deferReply();
+
+      // Réinitialisez l'historique de la conversation pour ce canal.
       conversationHistory[interaction.channelId] = [];
 
-      //Je stock l'historique dans un nouveau tableau pour ne pas le modifier si le call API crash et que je dois le réutiliser
+      // Créez un nouvel historique de conversation avec le message initial.
+      // Cette étape est effectuée pour éviter de modifier l'historique existant en cas d'échec de l'API.
       const newConversationHistory = [...conversationHistory[interaction.channelId], {
         role: "system",
         content: initialPrompt,
-    }];    
+      }];
 
-      const response = await callOpenAI(
-        newConversationHistory
-      );
+      const response = await callOpenAI(newConversationHistory);
       const botReply = response.data.choices[0].message.content;
 
-      //Je met à jour l'historique de conversation puisque le call API a fonctionné
+      // Mettez à jour l'historique de la conversation car l'appel API a réussi.
       conversationHistory[interaction.channelId] = newConversationHistory;
 
+      // Éditez la réponse initiale du bot avec la réponse obtenue de OpenAI.
       await interaction.editReply(`${botReply}\n`);
 
       conversationHistory[interaction.channelId].push({
         role: "assistant",
         content: botReply,
       });
+
+      // Indique que la conversation a commencé pour ce canal.
       conversationStarted[interaction.channelId] = true;
+
     } catch (error) {
       console.error("Erreur lors de la commande 'start':", error);
-      await interaction.followUp(
-        "Une erreur est survenue lors du démarrage de l'entretien."
-      );
+      await interaction.followUp("Une erreur est survenue lors du démarrage de l'entretien.");
     }
   }
-  if (commandName === "next") {
-    let provisionalMessage
-    try {
-      if (!conversationStarted[interaction.channelId])
-        return interaction.reply("L'entretien n'a pas encore commencé !");
 
-      provisionalMessage = await interaction.channel.send("Traitement en cours...");
-      const botReply = await callOpenAI(
-        conversationHistory[interaction.channel.id]
-      );
-      const res = botReply.data.choices[0].message.content;
-      if (res.length <= 2000) {
-        provisionalMessage.edit(res);
-        conversationHistory[interaction.channel.id].push({
-          role: "assistant",
-          content: res,
-        });
-      } else {
-        const messages = res.match(/.{1,2000}/g);
-        provisionalMessage.delete();
-        messages.forEach(async (msg: any) => {
-          await interaction.reply(msg);
-        });
-        conversationHistory[interaction.channel.id].push({
-          role: "assistant",
-          content: res,
-        });
-      }
-    } catch (error) {
-      console.error("Erreur lors de la commande 'next':", error);
-      if (provisionalMessage) provisionalMessage.delete(); // Suppression du message ici
-      await interaction.followUp(
-        "Une erreur est survenue lors de la poursuite de l'entretien."
-      );
+// si /next
+if (commandName === "next") {
+  try {
+    // Vérifiez si la conversation a commencé dans ce canal.
+    if (!conversationStarted[interaction.channelId])
+      return interaction.reply("L'entretien n'a pas encore commencé !");
+    
+      await interaction.deferReply();
+    
+    const botReply = await callOpenAI(conversationHistory[interaction.channel.id]);
+
+    const res = botReply.data.choices[0].message.content;
+
+    // Vérifiez si la réponse est courte (moins de 2000 caractères).
+    if (res.length <= 2000) {
+      interaction.editReply(res); // Mettez à jour le message temporaire avec la réponse.
+      conversationHistory[interaction.channel.id].push({
+        role: "assistant",
+        content: res,
+      });
+    } else {
+      // Si la réponse est longue, divisez-la en plusieurs messages de moins de 2000 caractères chacun.
+      const messages = res.match(/.{1,2000}/g);
+
+      // Envoyez chaque message découpé. (Discord bloque le nombre de caractère max)
+      messages.forEach(async (msg: any) => {
+        await interaction.reply(msg);
+      });
+
+      // Mettez à jour l'historique avec la réponse complète du bot.
+      conversationHistory[interaction.channel.id].push({
+        role: "assistant",
+        content: res,
+      });
     }
+  } catch (error) {
+    console.error("Erreur lors de la commande 'next':", error);
+    await interaction.followUp("Une erreur est survenue lors de la poursuite de l'entretien.");
   }
+}
 });
 
 
+//Fonction qui traite chaque nouveau message qui n'est pas une slash commande : /next etc.
 client.on("messageCreate", async (message: { author: { bot: any; }; channel: { parentId: string | undefined; send: (arg0: string) => any; id: string | number; }; content: any; }) => {
+
+  // Ignorer les messages provenant des bots.
   if (message.author.bot) return;
+
+  // Assurez-vous que le message provient de la bonne catégorie.
   if (message.channel.parentId !== CATEGORY_ID) return;
 
+  // Vérifiez si la conversation a commencé dans ce canal.
   if (!conversationStarted[message.channel.id])
     return message.channel.send("L'entretien n'a pas encore commencé !");
 
-  const provisionalMessage = await message.channel.send(
-    "Traitement en cours..."
-  );
+
+  const provisionalMessage = await message.channel.send("Traitement en cours...");
+
 
   conversationHistory[message.channel.id].push({
     role: "user",
     content: message.content,
   });
 
-  provisionalMessage.edit("**Réponse enregistrée !** _Vous pouvez décomposer votre réponse en plusieurs messages si vous le souhaitez. Pour valider et envoyer votre/vos messages et passer à la question suivante, tapez la commande /next_");
+  // Informez l'utilisateur que sa réponse a été enregistrée.
+  provisionalMessage.edit("**Réponse enregistrée !** _Vous pouvez décomposer votre réponse en plusieurs messages si vous le souhaitez. Pour valider et envoyer votre/vos messages et passer à la question suivante, tapez la commande **/next_**");
 });
 
 async function callOpenAI(content: Message[]) {
@@ -163,8 +196,9 @@ async function callOpenAI(content: Message[]) {
     Authorization: `Bearer ${OPENAI_API_KEY}`,
     "Content-Type": "application/json",
   };
-
+ 
   const messagesArray = content || [];
+
   return await axios.post(
     apiEndpoint,
     {
@@ -176,3 +210,4 @@ async function callOpenAI(content: Message[]) {
 }
 
 client.login(DISCORD_TOKEN);
+
