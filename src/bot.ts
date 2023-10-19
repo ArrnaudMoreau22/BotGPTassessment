@@ -54,16 +54,32 @@ const commands : Array<{ name: string; description: string; options?: Array<Comm
     ]
   },
   {
-    name: "settest",
-    description: "Définir le prompt de l'entretien.",
+    name: "setconsignetest ",
+    description: "Définir la consigne du test",
     options: [
       {
-        name: "test",
+        name: "consigne",
+        type: 3,
+        description: "envoyez ici la suite du test",
+        required: true
+      }
+    ]
+  },
+  {
+    name: "setsolutiontest",
+    description: "Définir la solution du test à analyser",
+    options: [
+      {
+        name: "solution",
         type: 3,
         description: "envoyez ici le test",
         required: true
       }
     ]
+  },
+  {
+    name: "run",
+    description: "Démarer l'entretien.",
   },
   //TODO : pas encore implémenté
   { 
@@ -102,44 +118,55 @@ client.on("interactionCreate", async (interaction: {
 }) => {
   // Vérifie si l'interaction est une commande.
   if (!interaction.isCommand()) return;
-
   const { commandName } = interaction;
 
   if (commandName === "setprompt") {
-  initialPrompt = interaction.options.getString("prompt") || "";
-  await interaction.reply(`Le prompt a été défini sur : \n >>> ${initialPrompt}\n\n`);
-  }
-  conversationHistory[interaction.channelId] = [];
-
-  conversationHistory[interaction.channelId].push({
-    role: "system",
-    content: initialPrompt,
-  });
-  if(commandName === "settest") {
-    try{
-    await interaction.reply(`Le test a été défini sur : \n >>> ${interaction.options.getString("test")}\n\n`);
-
-    const res = await callOpenAI([...conversationHistory[interaction.channel.id], { role: "system", content: interaction.options.getString("test") }]);
-
-    const botReply = res.data.choices[0].message.content;
-
-    await interaction.channel.send(`>>> ${botReply}`);
-
-    conversationHistory[interaction.channel.id].push({
+    const str = await interaction.options.getString("prompt")
+    await interaction.reply(`Le prompt a été défini sur : \n >>> ${str}\n\n`);
+    conversationHistory[interaction.channelId] = [];
+    conversationHistory[interaction.channelId].push({
       role: "system",
-      content: interaction.options.getString("test"),
+      content: str,
     });
+  }
+  if(commandName === "setconsignetest") {
+    const str = await interaction.options.getString("consigne")
+    await interaction.reply(`Le consigne du test a été définie sur : \n >>> ${str}\n\n`);
 
-    conversationHistory[interaction.channel.id].push({
-      role: "assistant",
-      content: botReply,
+    conversationHistory[interaction.channelId].push({
+      role: "system",
+      content: str,
     });
+  }
+  if (commandName === "setsolutiontest") {
+    const str = await interaction.options.getString("solution")
+    await interaction.reply(`La réponse du test a été définie sur  : \n >>> ${str}\n\n`);
 
+    conversationHistory[interaction.channelId].push({
+      role: "system",
+      content: str,
+    });
+  }
+  if (commandName === "run") {
+    try{
+
+      await interaction.deferReply();
+
+      const res = await callOpenAI(conversationHistory[interaction.channel.id]);
+      
+      const botReply = res.data.choices[0].message.content;
+ 
+      await interaction.followUp(`>>> ${botReply}`);
+      
+      conversationHistory[interaction.channel.id].push({
+        role: "assistant",
+        content: botReply
+      });
     }catch(error){
-    console.error("Erreur lors de la commande 'settest':", error);
-    await interaction.followUp("Une erreur est survenue lors de la définition du test.");
+      console.error("Erreur lors de la commande 'run':", error);
+      await interaction.followUp("Une erreur est survenue lors de la réponse à votre message.");
     }
-  }  
+  }
 });
 
 
@@ -155,7 +182,8 @@ client.on("messageCreate", async (message: { author: { bot: any; }; channel: { p
 
   try{
     conversationMessageProcessing[message.channel.id] = true;
-    message.channel.send(`Traitement de votre message en cours...`)
+
+    await message.channel.send(`Traitement de votre message en cours...`)
 
     const res = await callOpenAI([...conversationHistory[message.channel.id], { role: "user", content: message.content }]);
     
